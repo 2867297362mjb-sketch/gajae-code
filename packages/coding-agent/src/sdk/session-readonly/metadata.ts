@@ -28,6 +28,8 @@ export interface SessionMetadata {
 	size: number;
 	firstMessage: string;
 	allMessagesText: string;
+	/** True when session contains startup metadata (model_change, thinking_level_change, etc.). Used for resume picker filtering. */
+	hasStartupMetadata?: boolean;
 }
 
 /** Native callers retain their own recap enrichment and picker identity association. */
@@ -411,9 +413,6 @@ async function collectSessionFromFile(
 		}
 		firstMessage ||= extractFirstUserMessageFromPrefix(content) ?? "";
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
-		// Exclude metadata-only sessions (header + startup config like model_change, thinking_level_change, etc.)
-		// but no actual user/assistant messages from the resume listing.
-		if (hasStartupMetadata && messageCount === 0) return undefined;
 		const stats = storage.statSync(file);
 		const session: SessionMetadata = {
 			path: file,
@@ -429,6 +428,7 @@ async function collectSessionFromFile(
 			size: stats.size,
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
+			hasStartupMetadata,
 		};
 		if (enrich) await enrich(session, stats);
 		return session;
@@ -451,6 +451,15 @@ async function collectSessionsFromFileStride(
 		if (session) sessions.push(session);
 	}
 	return sessions;
+}
+
+/**
+ * Determine if a session should be excluded from resume picker.
+ * Excludes metadata-only sessions (header + startup config) with no actual messages,
+ * but only when we're sure the count is complete (not an estimate from prefix).
+ */
+export function isMetadataOnlyForResumePickerExclusion(session: SessionMetadata): boolean {
+	return session.hasStartupMetadata === true && session.messageCount === 0 && session.messageCountIsEstimate !== true;
 }
 
 /** Inspect already-selected transcript paths without persistence, repair, locking, or native manager construction. */

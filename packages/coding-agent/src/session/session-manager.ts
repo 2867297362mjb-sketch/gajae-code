@@ -95,6 +95,7 @@ import {
 } from "../sdk/session-readonly/inspection";
 import {
 	applySessionListHeaderPatch,
+	isMetadataOnlyForResumePickerExclusion,
 	readSessionListPrefix,
 	readSessionListTrailingPatches,
 	readSessionMetadata,
@@ -25046,14 +25047,14 @@ export class SessionManager {
 	 */
 	static async listManagedForResumePickerReadOnly(
 		cwd: string,
-		managedAgentDir?: string,
+		managgedAgentDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
 		if (!(storage instanceof FileSessionStorage)) return [];
-		const sessionsRoot = getSessionsDir(managedAgentDir);
+		const sessionsRoot = getSessionsDir(managgedAgentDir);
 		const resolved = resolveManagedScope({
 			cwd,
-			agentDir: managedAgentDir ?? path.resolve(sessionsRoot, ".."),
+			agentDir: managgedAgentDir ?? path.resolve(sessionsRoot, ".."),
 			sessionsRoot,
 		});
 		if (resolved.kind === "error") return [];
@@ -25063,7 +25064,10 @@ export class SessionManager {
 			listing.owned.filter(candidate => !isStagedSessionPath(candidate.path)).map(candidate => candidate.path),
 			storage,
 		);
-		return mergeSessionInventories(managed, await collectProjectSessions(cwd, storage));
+		const filtered = managed.filter(session => !isMetadataOnlyForResumePickerExclusion(session));
+		const projectSessions = await collectProjectSessions(cwd, storage);
+		const projectFiltered = projectSessions.filter(session => !isMetadataOnlyForResumePickerExclusion(session));
+		return mergeSessionInventories(filtered, projectFiltered);
 	}
 
 	/**
@@ -25078,10 +25082,11 @@ export class SessionManager {
 	): Promise<SessionInfo[]> {
 		if (!sessionDir) return await SessionManager.listManagedForResumePickerReadOnly(cwd, undefined, storage);
 		try {
-			return await collectSessionsFromFiles(
+			const sessions = await collectSessionsFromFiles(
 				storage.listFilesSync(sessionDir, "*.jsonl").filter(file => !isStagedSessionPath(file)),
 				storage,
 			);
+			return sessions.filter(session => !isMetadataOnlyForResumePickerExclusion(session));
 		} catch {
 			return [];
 		}

@@ -281,6 +281,28 @@ function metadataOnlySessionText(id: string): string {
 	return `${JSON.stringify(header)}\n${JSON.stringify(modelChange)}\n${JSON.stringify(thinkingChange)}\n`;
 }
 
+/** Session with large startup metadata that pushes the first message beyond the 4096-byte prefix. */
+function sessionWithLargeMetadataThenMessage(id: string): string {
+	const header = { type: "session", id, timestamp: new Date(0).toISOString(), cwd: "/cwd", version: 3 };
+	// Create large startup metadata entries that total > 4000 bytes
+	const largeModelChange = {
+		type: "model_change",
+		model: { provider: "openai", id: "gpt-4" },
+		timestamp: 0,
+		// Add a large description field to push the size over 4000 bytes
+		description: "x".repeat(4100),
+	};
+	// Add a user message after the large startup metadata
+	const message = {
+		type: "message",
+		id: "message",
+		parentId: null,
+		timestamp: new Date(0).toISOString(),
+		message: { role: "user", content: "hello", timestamp: 0 },
+	};
+	return `${JSON.stringify(header)}\n${JSON.stringify(largeModelChange)}\n${JSON.stringify(message)}\n`;
+}
+
 describe("SessionManager read-only resume", () => {
 	it("keeps strict managed read resolution fail-closed on ACL verification failure", () => {
 		const root = makeTempDir();
@@ -1082,6 +1104,54 @@ describe("SessionManager read-only resume", () => {
 		expect(defaults).toEqual([]);
 		expect(await SessionManager.listForResumePickerReadOnly(cwd, "/explicit", storage)).toHaveLength(1);
 		expect(storage.writes).toBe(0);
+	});
+
+	it("ISSUE1: should not exclude sessions with messages beyond the prefix boundary", async () => {
+		// When a session has large startup metadata before the first message,
+		// the message count from the prefix is 0, but messageCountIsEstimate is true.
+		// We should not exclude such sessions from resume picker.
+		const storage = new WriteTrackingStorage();
+		const sessionDir = makeTempDir();
+		const largeMetadataPath = path.join(sessionDir, "large-metadata.jsonl");
+		const normalPath = path.join(sessionDir, "normal.jsonl");
+
+		// Session with large startup metadata pushing first message beyond 4096-byte prefix
+		storage.writeTextSync(largeMetadataPath, sessionWithLargeMetadataThenMessage("large-meta-id"));
+		// Normal session for comparison
+		storage.writeTextSync(normalPath, sessionText("normal-id", "user"));
+
+		const listed = await SessionManager.listForResumePickerReadOnly("/cwd", sessionDir, storage);
+
+		// Both sessions should be listed because large-meta-id has an actual user message
+		// even though it's beyond the prefix boundary
+		expect(listed).toHaveLength(2);
+		const ids = listed.map(s => s.id).sort();
+		expect(ids).toEqual(["large-meta-id", "normal-id"]);
+	});
+
+	it("ISSUE2: should not apply metadata-only filtering to listAll() or generic list()", async () => {
+		// The metadata-only filtering should only apply to resume picker,
+		// not to generic session listing functions used by dashboard and other consumers.
+		const storage = new WriteTrackingStorage();
+		const sessionDir = makeTempDir();
+		const metadataOnlyPath = path.join(sessionDir, "metadata-only.jsonl");
+		const normalPath = path.join(sessionDir, "normal.jsonl");
+
+		// Create a metadata-only session
+		storage.writeTextSync(metadataOnlyPath, metadataOnlySessionText("metadata-only-id"));
+		// Create a normal session
+		storage.writeTextSync(normalPath, sessionText("normal-id", "user"));
+
+		// Resume picker should exclude metadata-only sessions
+		const resumeListed = await SessionManager.listForResumePickerReadOnly("/cwd", sessionDir, storage);
+		expect(resumeListed).toHaveLength(1);
+		expect(resumeListed[0]?.id).toBe("normal-id");
+
+		// But generic list() should include metadata-only sessions
+		const allListed = await SessionManager.list("/cwd", sessionDir, storage);
+		expect(allListed).toHaveLength(2);
+		const ids = allListed.map(s => s.id).sort();
+		expect(ids).toEqual(["metadata-only-id", "normal-id"]);
 	});
 
 	it("excludes metadata-only sessions (header + startup config) from resume listing", async () => {
