@@ -387,9 +387,17 @@ async function collectSessionFromFile(
 		let firstMessage = "";
 		const allMessages: string[] = [];
 		let shortSummary: string | undefined;
+		let hasStartupMetadata = false;
 		for (let i = 1; i < entries.length; i++) {
 			const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
 			if (entry.type === "compaction" && typeof entry.shortSummary === "string") shortSummary = entry.shortSummary;
+			// Detect startup metadata entries like model_change, thinking_level_change, etc.
+			if (
+				typeof entry.type === "string" &&
+				/^(model_change|thinking_level_change|provider_change|endpoint_change)$/.test(entry.type)
+			) {
+				hasStartupMetadata = true;
+			}
 			if (entry.type === "message" && entry.message) {
 				parsedMessageCount++;
 				if (entry.message.role === "user" || entry.message.role === "assistant") {
@@ -403,6 +411,9 @@ async function collectSessionFromFile(
 		}
 		firstMessage ||= extractFirstUserMessageFromPrefix(content) ?? "";
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
+		// Exclude metadata-only sessions (header + startup config like model_change, thinking_level_change, etc.)
+		// but no actual user/assistant messages from the resume listing.
+		if (hasStartupMetadata && messageCount === 0) return undefined;
 		const stats = storage.statSync(file);
 		const session: SessionMetadata = {
 			path: file,
