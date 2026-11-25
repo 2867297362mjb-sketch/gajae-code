@@ -281,6 +281,22 @@ function metadataOnlySessionText(id: string): string {
 	return `${JSON.stringify(header)}\n${JSON.stringify(modelChange)}\n${JSON.stringify(thinkingChange)}\n`;
 }
 
+/** Session with only header and startup metadata plus a displayable custom_message (handoff case). */
+function metadataWithHandoffCustomMessageText(id: string): string {
+	const header = { type: "session", id, timestamp: new Date(0).toISOString(), cwd: "/cwd", version: 3 };
+	const modelChange = { type: "model_change", model: { provider: "openai", id: "gpt-4" }, timestamp: 0 };
+	const customMessage = {
+		type: "custom_message",
+		id: "custom-msg-1",
+		parentId: null,
+		timestamp: new Date(0).toISOString(),
+		customType: "handoff",
+		content: "This is a handoff message with continuable content",
+		display: true,
+	};
+	return `${JSON.stringify(header)}\n${JSON.stringify(modelChange)}\n${JSON.stringify(customMessage)}\n`;
+}
+
 /** Session with large startup metadata that pushes the first message beyond the 4096-byte prefix. */
 function sessionWithLargeMetadataThenMessage(id: string): string {
 	const header = { type: "session", id, timestamp: new Date(0).toISOString(), cwd: "/cwd", version: 3 };
@@ -1169,6 +1185,26 @@ describe("SessionManager read-only resume", () => {
 		// Should only list the normal session, not the metadata-only one
 		expect(listed).toHaveLength(1);
 		expect(listed[0]?.id).toBe("normal-id");
+	});
+
+	it("REGRESSION: preserves sessions with displayable custom_message (handoff) entries in resume listing", async () => {
+		const storage = new WriteTrackingStorage();
+		const sessionDir = makeTempDir();
+		const metadataOnlyPath = path.join(sessionDir, "metadata-only.jsonl");
+		const handoffPath = path.join(sessionDir, "handoff.jsonl");
+		const normalPath = path.join(sessionDir, "normal.jsonl");
+
+		// Create a metadata-only session (should be excluded)
+		storage.writeTextSync(metadataOnlyPath, metadataOnlySessionText("metadata-only-id"));
+		// Create a session with startup metadata + displayable custom_message (should be included)
+		storage.writeTextSync(handoffPath, metadataWithHandoffCustomMessageText("handoff-id"));
+		// Create a normal session with messages (should be included)
+		storage.writeTextSync(normalPath, sessionText("normal-id", "user"));
+
+		const listed = await SessionManager.listForResumePickerReadOnly("/cwd", sessionDir, storage);
+		// Should list both handoff and normal, but not metadata-only
+		const ids = listed.map(s => s.id).sort();
+		expect(ids).toEqual(["handoff-id", "normal-id"]);
 	});
 });
 

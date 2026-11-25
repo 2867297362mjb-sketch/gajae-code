@@ -391,12 +391,20 @@ async function collectSessionFromFile(
 		let shortSummary: string | undefined;
 		let hasStartupMetadata = false;
 		for (let i = 1; i < entries.length; i++) {
-			const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
+			const entry = entries[i] as {
+				type?: string;
+				message?: Message;
+				shortSummary?: string;
+				display?: boolean;
+				content?: string | unknown;
+			};
 			if (entry.type === "compaction" && typeof entry.shortSummary === "string") shortSummary = entry.shortSummary;
-			// Detect startup metadata entries like model_change, thinking_level_change, etc.
+			// Detect startup metadata entries like model_change, thinking_level_change, provider_change, endpoint_change, service_tier_change.
 			if (
 				typeof entry.type === "string" &&
-				/^(model_change|thinking_level_change|provider_change|endpoint_change)$/.test(entry.type)
+				/^(model_change|thinking_level_change|provider_change|endpoint_change|service_tier_change)$/.test(
+					entry.type,
+				)
 			) {
 				hasStartupMetadata = true;
 			}
@@ -409,6 +417,9 @@ async function collectSessionFromFile(
 						if (!firstMessage && entry.message.role === "user") firstMessage = textContent;
 					}
 				}
+			} else if (entry.type === "custom_message" && entry.display === true) {
+				// Count displayable custom_message entries as actual messages for exclusion purposes
+				parsedMessageCount++;
 			}
 		}
 		firstMessage ||= extractFirstUserMessageFromPrefix(content) ?? "";

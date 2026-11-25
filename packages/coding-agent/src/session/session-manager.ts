@@ -7633,7 +7633,7 @@ export async function resolveResumableSession(
 	managedAgentDir?: string,
 ): Promise<ResolvedSessionMatch | undefined> {
 	const localSessions = sessionDir
-		? await SessionManager.list(cwd, sessionDir, storage)
+		? await SessionManager.listForResumePickerReadOnly(cwd, sessionDir, storage)
 		: await SessionManager.listManagedForResumePickerReadOnly(cwd, managedAgentDir, storage);
 	const localMatch = pickResumableSession(localSessions, sessionArg);
 	if (localMatch) {
@@ -25041,20 +25041,19 @@ export class SessionManager {
 		}
 	}
 	/**
-	 * List default-managed sessions for the resume picker without recovery or other
-	 * maintenance writes. This is the only picker inventory that includes legacy
-	 * sibling directories.
+	 * List default-managed sessions without filtering, including both managed and project-local.
+	 * This is used for generic session enumeration and ID resolution.
 	 */
-	static async listManagedForResumePickerReadOnly(
+	private static async listManagedReadOnlyUnfiltered(
 		cwd: string,
-		managgedAgentDir?: string,
+		managedAgentDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
 		if (!(storage instanceof FileSessionStorage)) return [];
-		const sessionsRoot = getSessionsDir(managgedAgentDir);
+		const sessionsRoot = getSessionsDir(managedAgentDir);
 		const resolved = resolveManagedScope({
 			cwd,
-			agentDir: managgedAgentDir ?? path.resolve(sessionsRoot, ".."),
+			agentDir: managedAgentDir ?? path.resolve(sessionsRoot, ".."),
 			sessionsRoot,
 		});
 		if (resolved.kind === "error") return [];
@@ -25064,10 +25063,22 @@ export class SessionManager {
 			listing.owned.filter(candidate => !isStagedSessionPath(candidate.path)).map(candidate => candidate.path),
 			storage,
 		);
-		const filtered = managed.filter(session => !isMetadataOnlyForResumePickerExclusion(session));
 		const projectSessions = await collectProjectSessions(cwd, storage);
-		const projectFiltered = projectSessions.filter(session => !isMetadataOnlyForResumePickerExclusion(session));
-		return mergeSessionInventories(filtered, projectFiltered);
+		return mergeSessionInventories(managed, projectSessions);
+	}
+
+	/**
+	 * List default-managed sessions for the resume picker without recovery or other
+	 * maintenance writes. This is the only picker inventory that includes legacy
+	 * sibling directories.
+	 */
+	static async listManagedForResumePickerReadOnly(
+		cwd: string,
+		managedAgentDir?: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<SessionInfo[]> {
+		const unfiltered = await SessionManager.listManagedReadOnlyUnfiltered(cwd, managedAgentDir, storage);
+		return unfiltered.filter(session => !isMetadataOnlyForResumePickerExclusion(session));
 	}
 
 	/**
@@ -26187,7 +26198,7 @@ export class SessionManager {
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
-		if (!sessionDir) return await SessionManager.listManagedForResumePickerReadOnly(cwd, undefined, storage);
+		if (!sessionDir) return await SessionManager.listManagedReadOnlyUnfiltered(cwd, undefined, storage);
 		try {
 			await recoverOrphanedBackups(sessionDir, storage);
 			return await collectSessionsFromFiles(storage.listFilesSync(sessionDir, "*.jsonl"), storage);
